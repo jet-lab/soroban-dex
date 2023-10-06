@@ -5,6 +5,7 @@
 
 mod storage;
 
+use soroban_sdk::contracttype;
 pub use storage::*;
 
 /// A general purpose order book
@@ -85,13 +86,14 @@ where
             }
         }
 
+        let mut posted_id = None;
         if amount_to_post > 0 {
-            self.book
-                .place_order(params.side, params.price, amount_to_post, &params.details);
+            posted_id = Some(self.book
+                .place_order(params.side, params.price, amount_to_post, &params.details));
         }
 
         OrderSummary {
-            posted_id: None,
+            posted_id,
             posted_size: amount_to_post,
         }
     }
@@ -109,11 +111,12 @@ pub trait Book<T: 'static> {
 }
 
 /// The side of the book an order can be placed on
+#[contracttype]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub enum OrderSide {
     Bid = 0,
-    Ask,
+    Ask = 1,
 }
 
 impl OrderSide {

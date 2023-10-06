@@ -329,6 +329,7 @@ dependencies = [
  "fixed",
  "orderbook",
  "soroban-sdk",
+ "soroban-token-sdk",
 ]
 
 [[package]]
@@ -1130,6 +1131,15 @@ dependencies = [
  "stellar-xdr",
  "syn",
  "thiserror",
+]
+
+[[package]]
+name = "soroban-token-sdk"
+version = "20.0.0-rc2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7294182d2197ac4da58163ca8f9c2e4df2045e5b81752928d82da9289ef366ee"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]

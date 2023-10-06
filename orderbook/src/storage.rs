@@ -43,17 +43,28 @@ impl OrderId {
         }
     }
 
+    pub fn book_key(&self) -> Bytes {
+        Bytes::from_slice(&self.0.env(), &self.0.to_array()[0..3])
+    }
+
     pub fn price(&self) -> u64 {
-        u64::from_be_bytes(self.0.to_array()[12..20].try_into().unwrap())
+        u64::from_be_bytes(self.0.to_array()[4..12].try_into().unwrap())
+    }
+
+    pub fn price_key(&self) -> Bytes {
+        let mut bytes = Bytes::from_slice(&self.0.env(), &self.0.to_array()[0..12]);
+        bytes.set(4, 0);
+
+        bytes
     }
 
     pub fn id(&self) -> u32 {
-        u32::from_be_bytes(self.0.to_array()[20..24].try_into().unwrap())
+        u32::from_be_bytes(self.0.to_array()[12..16].try_into().unwrap())
     }
 
     pub fn with_attr_key(&self, key: u8) -> Self {
         let mut bytes = self.0.to_array();
-        bytes[9] = key;
+        bytes[4] = key;
 
         Self(BytesN::from_array(self.0.env(), &bytes))
     }
@@ -119,12 +130,8 @@ impl BookStorage {
         self.storage().set(&key, book);
     }
 
-    fn price_queue_key(&self, price: u64) -> BytesN<16> {
-        let mut price_key_bytes = [0u8; 16];
-        price_key_bytes[0..8].copy_from_slice(&self.prefix.to_be_bytes());
-        price_key_bytes[8..16].copy_from_slice(&price.to_be_bytes());
-
-        BytesN::<16>::from_array(&self.env, &price_key_bytes)
+    fn price_queue_key(&self, price: u64) -> Bytes {
+        OrderId::new(&self.env, self.prefix, OrderSide::Bid, price, 0).price_key()
     }
 
     fn get_price_queue(&self, price: u64) -> Vec<u32> {
@@ -132,7 +139,7 @@ impl BookStorage {
         self.env
             .storage()
             .persistent()
-            .get::<BytesN<16>, Vec<u32>>(&price_key)
+            .get::<Bytes, Vec<u32>>(&price_key)
             .unwrap_or_else(|| Vec::new(&self.env))
     }
 
@@ -171,10 +178,8 @@ where
         let book = self.get_book(side);
 
         match side {
-            OrderSide::Bid => {
-                StoredOrders::bids(&self.env, self.prefix, book.keys().into_iter().rev())
-            }
-            OrderSide::Ask => StoredOrders::asks(&self.env, self.prefix, book.keys().into_iter()),
+            OrderSide::Bid => StoredOrders::bids(self, book.keys().into_iter().rev()),
+            OrderSide::Ask => StoredOrders::asks(self, book.keys().into_iter()),
         }
     }
 
@@ -237,8 +242,7 @@ where
 }
 
 struct StoredOrders {
-    prefix: u16,
-    env: Env,
+    storage: BookStorage,
     inner: StoredOrdersInner,
     side: OrderSide,
     current_price: u64,
@@ -247,13 +251,11 @@ struct StoredOrders {
 
 impl StoredOrders {
     fn bids(
-        env: &Env,
-        prefix: u16,
+        storage: &BookStorage,
         prices: core::iter::Rev<<Vec<u64> as IntoIterator>::IntoIter>,
     ) -> Self {
         Self {
-            prefix,
-            env: env.clone(),
+            storage: storage.clone(),
             inner: StoredOrdersInner::BidPrices(prices),
             side: OrderSide::Bid,
             current_price: 0,
@@ -261,10 +263,9 @@ impl StoredOrders {
         }
     }
 
-    fn asks(env: &Env, prefix: u16, prices: <Vec<u64> as IntoIterator>::IntoIter) -> Self {
+    fn asks(storage: &BookStorage, prices: <Vec<u64> as IntoIterator>::IntoIter) -> Self {
         Self {
-            prefix,
-            env: env.clone(),
+            storage: storage.clone(),
             inner: StoredOrdersInner::AskPrices(prices),
             side: OrderSide::Ask,
             current_price: 0,
@@ -294,19 +295,8 @@ impl Iterator for StoredOrders {
                         return None;
                     };
 
-                    let mut price_key_bytes = [0u8; 16];
-                    price_key_bytes[0..8].copy_from_slice(&self.prefix.to_be_bytes());
-                    price_key_bytes[8..16].copy_from_slice(&price.to_be_bytes());
-
-                    let price_key = BytesN::<16>::from_array(&self.env, &price_key_bytes);
                     self.current_price = price;
-                    self.current_queue = Some(
-                        self.env
-                            .storage()
-                            .persistent()
-                            .get::<BytesN<16>, Vec<u32>>(&price_key)
-                            .unwrap(),
-                    );
+                    self.current_queue = Some(self.storage.get_price_queue(price));
                 }
 
                 Some(queue) => {
@@ -319,8 +309,8 @@ impl Iterator for StoredOrders {
                     };
 
                     return Some(OrderId::new(
-                        &self.env,
-                        self.prefix,
+                        &self.storage.env,
+                        self.storage.prefix,
                         self.side,
                         self.current_price,
                         local_order_id,
@@ -364,12 +354,8 @@ mod tests {
             book.remove_order(&id);
         }
 
-        pub fn get_order_size(env: Env, id: OrderId) -> u128 {
-            let book = Self::book(&env);
-
-            let order = book.get_order(&id).unwrap();
-
-            order.size
+        pub fn get_order_size(env: Env, id: OrderId) -> Option<u128> {
+            Self::book(&env).get_order(&id).map(|o| o.size)
         }
 
         pub fn top_bid(env: Env) -> Option<OrderId> {
@@ -423,8 +409,8 @@ mod tests {
 
         assert_eq!(150, client.top_bid().unwrap().price());
         assert_eq!(200, client.top_ask().unwrap().price());
-        assert_eq!(30, client.get_order_size(&orders[1]));
-        assert_eq!(10, client.get_order_size(&orders[4]));
+        assert_eq!(Some(30), client.get_order_size(&orders[1]));
+        assert_eq!(Some(10), client.get_order_size(&orders[4]));
 
         client.remove_order(&orders[1]);
         client.remove_order(&orders[4]);
@@ -454,8 +440,8 @@ mod tests {
             let bid = client.top_bid().unwrap();
             let ask = client.top_ask().unwrap();
 
-            assert_eq!(size, client.get_order_size(&bid));
-            assert_eq!(size, client.get_order_size(&ask));
+            assert_eq!(Some(size), client.get_order_size(&bid));
+            assert_eq!(Some(size), client.get_order_size(&ask));
 
             client.remove_order(&bid);
             client.remove_order(&ask);

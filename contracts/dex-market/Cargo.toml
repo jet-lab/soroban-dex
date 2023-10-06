@@ -9,6 +9,10 @@ crate-type = ["cdylib"]
 [dependencies]
 fixed = "1.24"
 
-soroban-sdk = "20.0.0-rc2"
+soroban-sdk = { workspace = true }
 
 orderbook = { path = "../../orderbook" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+soroban-token-sdk = { workspace = true }

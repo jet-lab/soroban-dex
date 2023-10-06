@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 hex = { version = "0.4", default-features = false }
 
-soroban-sdk = "20.0.0-rc2"
+soroban-sdk = { workspace = true }
 
 [dev-dependencies]
-soroban-sdk = { version = "20.0.0-rc2", features = ["testutils"] }
+soroban-sdk = { workspace = true, features = ["testutils"] }
