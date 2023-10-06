@@ -88,8 +88,12 @@ where
 
         let mut posted_id = None;
         if amount_to_post > 0 {
-            posted_id = Some(self.book
-                .place_order(params.side, params.price, amount_to_post, &params.details));
+            posted_id = Some(self.book.place_order(
+                params.side,
+                params.price,
+                amount_to_post,
+                &params.details,
+            ));
         }
 
         OrderSummary {

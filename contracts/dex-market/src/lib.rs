@@ -238,7 +238,13 @@ mod tests {
             todo!()
         }
 
-        fn approve(_e: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) {
+        fn approve(
+            _e: Env,
+            _from: Address,
+            _spender: Address,
+            _amount: i128,
+            _expiration_ledger: u32,
+        ) {
             todo!()
         }
 
