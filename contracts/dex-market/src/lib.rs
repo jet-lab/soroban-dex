@@ -226,77 +226,6 @@ const MARKET_INFO: Symbol = symbol_short!("MARKETINF");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{token::Interface, String};
-    use soroban_token_sdk::TokenUtils;
-
-    #[contract]
-    struct MockToken;
-
-    #[contractimpl]
-    impl soroban_sdk::token::Interface for MockToken {
-        fn allowance(_e: Env, _from: Address, _spender: Address) -> i128 {
-            todo!()
-        }
-
-        fn approve(
-            _e: Env,
-            _from: Address,
-            _spender: Address,
-            _amount: i128,
-            _expiration_ledger: u32,
-        ) {
-            todo!()
-        }
-
-        fn balance(e: Env, id: Address) -> i128 {
-            e.storage()
-                .persistent()
-                .get::<Address, i128>(&id)
-                .unwrap_or(0)
-        }
-
-        fn spendable_balance(e: Env, id: Address) -> i128 {
-            Self::balance(e, id)
-        }
-
-        fn transfer(e: Env, from: Address, to: Address, amount: i128) {
-            from.require_auth();
-
-            let from_balance = Self::balance(e.clone(), from.clone());
-            let to_balance = Self::balance(e.clone(), to.clone());
-
-            e.storage()
-                .persistent()
-                .set(&from, &(from_balance - amount));
-            e.storage().persistent().set(&from, &(to_balance + amount));
-
-            TokenUtils::new(&e).events().transfer(from, to, amount);
-        }
-
-        fn transfer_from(_e: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {
-            todo!()
-        }
-
-        fn burn(_e: Env, _from: Address, _amount: i128) {
-            todo!()
-        }
-
-        fn burn_from(_e: Env, _spender: Address, _from: Address, _amount: i128) {
-            todo!()
-        }
-
-        fn decimals(_e: Env) -> u32 {
-            0
-        }
-
-        fn name(e: Env) -> String {
-            String::from_slice(&e, "MockToken")
-        }
-
-        fn symbol(e: Env) -> String {
-            String::from_slice(&e, "MockToken")
-        }
-    }
 
     struct TestEnv {
         env: Env,
@@ -311,8 +240,8 @@ mod tests {
             use soroban_sdk::testutils::Address;
 
             let env = Env::default();
-            let base_token = env.register_contract(None, MockToken);
-            let quote_token = env.register_contract(None, MockToken);
+            let base_token = env.register_contract(None, test_token::Token);
+            let quote_token = env.register_contract(None, test_token::Token);
             let market = env.register_contract(None, DexMarketContract);
 
             let market_client = DexMarketContractClient::new(&env, &market);
@@ -340,12 +269,12 @@ mod tests {
             DexMarketContractClient::new(&self.env, &self.market)
         }
 
-        fn base_client(&self) -> MockTokenClient {
-            MockTokenClient::new(&self.env, &self.quote_token)
+        fn base_client(&self) -> test_token::TokenClient {
+            test_token::TokenClient::new(&self.env, &self.base_token)
         }
 
-        fn quote_client(&self) -> MockTokenClient {
-            MockTokenClient::new(&self.env, &self.base_token)
+        fn quote_client(&self) -> test_token::TokenClient {
+            test_token::TokenClient::new(&self.env, &self.quote_token)
         }
     }
 
@@ -357,10 +286,13 @@ mod tests {
 
         ctx.env.mock_all_auths();
 
+        ctx.base_client().mint(&ctx.users[0], &125);
+        ctx.quote_client().mint(&ctx.users[1], &100);
+
         let _ = market
             .place_order(&OrderParams {
                 side: OrderSide::Ask,
-                size: 100,
+                size: 125,
                 price: (1 << 32),
                 owner: ctx.users[0].clone(),
             })

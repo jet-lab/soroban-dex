@@ -36,7 +36,7 @@ impl OrderId {
     }
 
     pub fn side(&self) -> OrderSide {
-        match self.0.to_array()[8] {
+        match self.0.to_array()[3] {
             0 => OrderSide::Bid,
             1 => OrderSide::Ask,
             _ => unreachable!(),

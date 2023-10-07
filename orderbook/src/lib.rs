@@ -73,12 +73,13 @@ where
                 let order_new_size = order.size - amount_to_post;
 
                 self.book.modify_order(&order_id, order_new_size);
-                amount_to_post = 0;
 
                 on_match(&OrderEntry {
-                    size: order_new_size,
+                    size: amount_to_post,
                     ..order
                 });
+
+                amount_to_post = 0;
             }
 
             if amount_to_post == 0 {

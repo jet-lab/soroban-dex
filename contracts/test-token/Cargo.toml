@@ -1,20 +1,15 @@
 [package]
-name = "dex-market"
+name = "test-token"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
 crate-type = ["lib", "cdylib"]
 
+[features]
+testutils = []
+default = ["testutils"]
+
 [dependencies]
-fixed = "1.24"
-
-soroban-sdk = { workspace = true }
-
-orderbook = { path = "../../orderbook" }
-
-[dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 soroban-token-sdk = { workspace = true }
-
-test-token = { path = "../test-token" }

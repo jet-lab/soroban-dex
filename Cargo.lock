@@ -330,6 +330,7 @@ dependencies = [
  "orderbook",
  "soroban-sdk",
  "soroban-token-sdk",
+ "test-token",
 ]
 
 [[package]]
@@ -1222,6 +1223,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "test-token"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "soroban-token-sdk",
 ]
 
 [[package]]
