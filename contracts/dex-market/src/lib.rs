@@ -104,16 +104,14 @@ impl DexMarket for DexMarketContract {
         }
 
         params.details.owner.require_auth();
+        let quote_offer_amount = quote_amount(params.price, params.size);
 
         match params.side {
             OrderSide::Bid => {
-                let quote_offer_amount =
-                    U96F32::from_bits(params.price as u128) * U96F32::from_num(params.size);
-
                 quote.transfer(
                     &params.details.owner,
                     &env.current_contract_address(),
-                    &quote_offer_amount.to_num(),
+                    &quote_offer_amount,
                 );
             }
 
@@ -126,13 +124,17 @@ impl DexMarket for DexMarketContract {
             }
         }
 
+        let mut quote_consumed = 0;
+        let mut base_consumed = 0;
         let mut is_self_trade = false;
         let summary = order_book.place_order(&params, |entry| {
             is_self_trade = is_self_trade || entry.details.owner == params.details.owner;
 
-            let price = U96F32::from_bits(entry.price as u128);
             let base_amount = entry.size as i128;
-            let quote_amount = (price * U96F32::from_num(entry.size)).to_num();
+            let quote_amount = quote_amount(entry.price, entry.size);
+
+            base_consumed += base_amount;
+            quote_consumed += quote_amount;
 
             match entry.id.side() {
                 OrderSide::Bid => {
@@ -169,6 +171,32 @@ impl DexMarket for DexMarketContract {
             return Err(DexMarketError::CannotSelfTrade);
         }
 
+        // return unnecessary tokens
+        match params.side {
+            OrderSide::Bid => {
+                let return_token_amount = quote_offer_amount
+                    - quote_consumed
+                    - quote_amount(params.price, summary.posted_size);
+
+                quote.transfer(
+                    &env.current_contract_address(),
+                    &params.details.owner,
+                    &return_token_amount,
+                );
+            }
+
+            OrderSide::Ask => {
+                let return_token_amount =
+                    (params.size - summary.posted_size) as i128 - base_consumed;
+
+                base.transfer(
+                    &env.current_contract_address(),
+                    &params.details.owner,
+                    &return_token_amount,
+                );
+            }
+        }
+
         Ok(summary.posted_id)
     }
 
@@ -196,13 +224,12 @@ impl DexMarket for DexMarketContract {
                 }
 
                 OrderSide::Bid => {
-                    let price = U96F32::from_bits(order_detail.price as u128);
-                    let token_amount = price * U96F32::from_num(order_detail.size);
+                    let token_amount = quote_amount(order_detail.price, order_detail.size);
 
                     quote.transfer(
                         &env.current_contract_address(),
                         &order_detail.details.owner,
-                        &token_amount.to_num(),
+                        &token_amount,
                     );
                 }
             }
@@ -222,6 +249,13 @@ struct OrderDetail {
 }
 
 const MARKET_INFO: Symbol = symbol_short!("MARKETINF");
+
+fn quote_amount(price: u64, base_amount: u128) -> i128 {
+    let price = U96F32::from_bits(price as u128);
+    let token_amount = price * U96F32::from_num(base_amount);
+
+    token_amount.to_num()
+}
 
 #[cfg(test)]
 mod tests {
@@ -310,5 +344,87 @@ mod tests {
 
         assert_eq!(100, balance_0_quote);
         assert_eq!(100, balance_1_base);
+    }
+
+    #[test]
+    fn test_price_limit_matching() {
+        let ctx = TestEnv::new();
+
+        let market = ctx.market_client();
+
+        ctx.env.mock_all_auths();
+
+        ctx.base_client().mint(&ctx.users[0], &1_000);
+        ctx.quote_client().mint(&ctx.users[1], &3_000);
+
+        let _ = market
+            .place_order(&OrderParams {
+                side: OrderSide::Ask,
+                size: 1_000,
+                price: (2 << 32),
+                owner: ctx.users[0].clone(),
+            })
+            .unwrap();
+
+        market.place_order(&OrderParams {
+            side: OrderSide::Bid,
+            size: 1_000,
+            price: (3 << 32),
+            owner: ctx.users[1].clone(),
+        });
+
+        let balance_0_quote = ctx.quote_client().balance(&ctx.users[0]);
+        let balance_1_base = ctx.base_client().balance(&ctx.users[1]);
+
+        let balance_0_base = ctx.base_client().balance(&ctx.users[0]);
+        let balance_1_quote = ctx.quote_client().balance(&ctx.users[1]);
+
+        assert_eq!(0, balance_0_base);
+        assert_eq!(2_000, balance_0_quote);
+
+        assert_eq!(1_000, balance_1_base);
+        assert_eq!(1_000, balance_1_quote);
+    }
+
+    #[test]
+    fn test_multiple_matching() {
+        let ctx = TestEnv::new();
+
+        let market = ctx.market_client();
+
+        ctx.env.mock_all_auths();
+
+        ctx.base_client().mint(&ctx.users[0], &1_000);
+        ctx.quote_client().mint(&ctx.users[1], &3_000);
+
+        for i in 1..5 {
+            let _ = market
+                .place_order(&OrderParams {
+                    side: OrderSide::Ask,
+                    price: (i << 32),
+                    size: 100 * i as u128,
+                    owner: ctx.users[0].clone(),
+                })
+                .unwrap();
+        }
+
+        market.place_order(&OrderParams {
+            side: OrderSide::Bid,
+            size: 1_000,
+            price: (3 << 32),
+            owner: ctx.users[1].clone(),
+        });
+
+        let balance_0_quote = ctx.quote_client().balance(&ctx.users[0]);
+        let balance_1_base = ctx.base_client().balance(&ctx.users[1]);
+
+        let balance_0_base = ctx.base_client().balance(&ctx.users[0]);
+        let balance_1_quote = ctx.quote_client().balance(&ctx.users[1]);
+
+        assert_eq!(0, balance_0_base);
+        assert_eq!(600, balance_1_base);
+
+        assert_eq!(1_400, balance_0_quote);
+        assert_eq!(4_00, balance_1_quote);
     }
 }
