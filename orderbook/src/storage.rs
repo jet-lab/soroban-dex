@@ -1,89 +1,6 @@
-use core::fmt::Debug;
+use soroban_sdk::{storage::Persistent, Bytes, Env, IntoVal, Map, TryFromVal, Val, Vec};
 
-use soroban_sdk::{
-    contracttype, storage::Persistent, Bytes, BytesN, Env, IntoVal, Map, TryFromVal, Val, Vec,
-};
-
-use crate::{Book, OrderEntry, OrderSide};
-
-pub const ORDER_ATTR_KEY_DETAIL: u8 = 0;
-pub const ORDER_ATTR_KEY_SIZE: u8 = 1;
-
-/// An identifier for an order in the book
-///
-/// This is also the key for the order in the contract storage
-///
-/// Structure:
-///     - 2 bytes: prefix (for contract storage namespacing)
-///     - 1 byte: order side
-///     - 1 byte: order attribute keyspace
-///     - 8 bytes: price (lists orders)
-///     - 4 bytes: order id (a specific order entry)
-#[contracttype]
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct OrderId(BytesN<16>);
-
-impl OrderId {
-    pub fn new(env: &Env, prefix: u16, side: OrderSide, price: u64, id: u32) -> Self {
-        let mut bytes = [0u8; 16];
-        bytes[0..2].copy_from_slice(&prefix.to_be_bytes());
-        bytes[3] = side as u8;
-
-        bytes[4..12].copy_from_slice(&price.to_be_bytes());
-        bytes[12..16].copy_from_slice(&id.to_be_bytes());
-
-        Self(BytesN::from_array(env, &bytes))
-    }
-
-    pub fn side(&self) -> OrderSide {
-        match self.0.to_array()[3] {
-            0 => OrderSide::Bid,
-            1 => OrderSide::Ask,
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn book_key(&self) -> Bytes {
-        Bytes::from_slice(&self.0.env(), &self.0.to_array()[0..3])
-    }
-
-    pub fn price(&self) -> u64 {
-        u64::from_be_bytes(self.0.to_array()[4..12].try_into().unwrap())
-    }
-
-    pub fn price_key(&self) -> Bytes {
-        let mut bytes = Bytes::from_slice(&self.0.env(), &self.0.to_array()[0..12]);
-        bytes.set(4, 0);
-
-        bytes
-    }
-
-    pub fn id(&self) -> u32 {
-        u32::from_be_bytes(self.0.to_array()[12..16].try_into().unwrap())
-    }
-
-    pub fn with_attr_key(&self, key: u8) -> Self {
-        let mut bytes = self.0.to_array();
-        bytes[4] = key;
-
-        Self(BytesN::from_array(self.0.env(), &bytes))
-    }
-}
-
-impl AsRef<BytesN<16>> for OrderId {
-    fn as_ref(&self) -> &BytesN<16> {
-        &self.0
-    }
-}
-
-impl Debug for OrderId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut bytes = [0u8; 48];
-        hex::encode_to_slice(self.0.to_array(), &mut bytes).unwrap();
-
-        write!(f, "{}", core::str::from_utf8(&bytes).unwrap())
-    }
-}
+use crate::{Book, OrderEntry, OrderEvent, OrderEventMap, OrderId, OrderSide};
 
 /// Provides an order book storage interface within a Soroban contract environment
 #[derive(Clone)]
@@ -99,7 +16,7 @@ impl BookStorage {
     ///
     /// `prefix` - An identifier which is used as a prefix for all keys that will be used
     ///            to store data for the order book.
-    pub fn open(env: &Env, prefix: u16) -> Self {
+    pub fn new(env: &Env, prefix: u16) -> Self {
         Self {
             prefix,
             env: env.clone(),
@@ -108,6 +25,13 @@ impl BookStorage {
 
     fn storage(&self) -> Persistent {
         self.env.storage().persistent()
+    }
+
+    fn order_events_key(&self) -> Bytes {
+        let mut key = Bytes::from_array(&self.env, &self.prefix.to_be_bytes());
+        key.push_back(0xFF);
+
+        key
     }
 
     fn book_key(&self, side: OrderSide) -> Bytes {
@@ -134,23 +58,46 @@ impl BookStorage {
         OrderId::new(&self.env, self.prefix, OrderSide::Bid, price, 0).price_key()
     }
 
-    fn get_price_queue(&self, price: u64) -> Vec<u32> {
+    fn get_price_queue(&self, price: u64) -> Map<u32, u128> {
         let price_key = self.price_queue_key(price);
         self.env
             .storage()
             .persistent()
-            .get::<Bytes, Vec<u32>>(&price_key)
-            .unwrap_or_else(|| Vec::new(&self.env))
+            .get::<Bytes, Map<u32, u128>>(&price_key)
+            .unwrap_or_else(|| Map::new(&self.env))
     }
 
-    fn set_price_queue(&self, price: u64, queue: &Vec<u32>) {
+    fn set_price_queue(&self, price: u64, queue: &Map<u32, u128>) {
         let price_key = self.price_queue_key(price);
         self.env.storage().persistent().set(&price_key, queue)
     }
 
-    fn set_order_size(&self, id: &OrderId, size: u128) {
-        let size_key = id.with_attr_key(ORDER_ATTR_KEY_SIZE);
-        self.storage().set(&size_key, &size);
+    fn cleanup_order(&self, order: &OrderId, force_remove: bool) {
+        let mut queue = self.get_price_queue(order.price());
+        let current_size = queue.get(order.id()).unwrap_or(0);
+
+        if current_size > 0 && !force_remove {
+            return;
+        }
+
+        queue.remove(order.id());
+        self.storage().remove(order);
+
+        let price = order.price();
+
+        match queue.is_empty() {
+            false => self.set_price_queue(price, &queue),
+            true => {
+                self.storage().remove(&self.price_queue_key(price));
+
+                // since the order queue is empty for the price now, also remove
+                // the price from the root list
+                let mut book = self.get_book(order.side());
+                book.remove(price);
+
+                self.set_book(order.side(), &book);
+            }
+        }
     }
 }
 
@@ -158,11 +105,9 @@ impl<T> Book<T> for BookStorage
 where
     T: TryFromVal<Env, Val> + IntoVal<Env, Val> + 'static,
 {
-    type OrderId = OrderId;
-
-    fn get_order(&self, id: &Self::OrderId) -> Option<OrderEntry<Self::OrderId, T>> {
-        let size_key = id.with_attr_key(ORDER_ATTR_KEY_SIZE);
-        let size = self.storage().get::<OrderId, u128>(&size_key)?;
+    fn get_order(&self, id: &OrderId) -> Option<OrderEntry<OrderId, T>> {
+        let queue = self.get_price_queue(id.price());
+        let size = queue.get(id.id())?;
 
         self.storage()
             .get::<OrderId, T>(&id)
@@ -183,7 +128,7 @@ where
         }
     }
 
-    fn place_order(&self, side: OrderSide, price: u64, size: u128, details: &T) -> Self::OrderId {
+    fn place_order(&self, side: OrderSide, price: u64, size: u128, details: &T) -> OrderId {
         // update book price list
         let mut book = self.get_book(side);
 
@@ -194,50 +139,103 @@ where
 
         // update price order queue
         let mut queue = self.get_price_queue(price);
-        let next_local_id = queue.last().map(|id| id + 1).unwrap_or(0);
+        let next_local_id = queue.keys().last().map(|id| id + 1).unwrap_or(0);
 
-        queue.push_back(next_local_id);
+        queue.set(next_local_id, size);
         self.set_price_queue(price, &queue);
 
         // set order entry
         let order_id = OrderId::new(&self.env, self.prefix, side, price, next_local_id);
         self.storage().set(&order_id, details);
 
-        // set order size
-        self.set_order_size(&order_id, size);
-
         order_id
     }
 
-    fn remove_order(&self, id: &Self::OrderId) {
-        // remove detail and size
-        self.storage().remove(id);
-        self.storage()
-            .remove(&id.with_attr_key(ORDER_ATTR_KEY_SIZE));
-
-        // update price order queue
-        let mut queue = self.get_price_queue(id.price());
-        if let Some(index) = queue.first_index_of(id.id()) {
-            queue.remove(index);
-        }
-
-        match queue.is_empty() {
-            false => self.set_price_queue(id.price(), &queue),
-            true => {
-                self.storage().remove(&self.price_queue_key(id.price()));
-
-                // since the order queue is empty for the price now, also remove
-                // the price from the root list
-                let mut book = self.get_book(id.side());
-                book.remove(id.price());
-
-                self.set_book(id.side(), &book);
-            }
-        }
+    fn remove_order(&self, id: &OrderId) {
+        self.cleanup_order(id, true)
     }
 
-    fn modify_order(&self, id: &Self::OrderId, size: u128) {
-        self.set_order_size(id, size)
+    fn modify_order(&self, id: &OrderId, size: u128) {
+        let mut queue = self.get_price_queue(id.price());
+        queue.set(id.id(), size);
+
+        self.set_price_queue(id.price(), &queue);
+    }
+
+    fn order_events(&self) -> impl OrderEventMap {
+        OrderEventQueue::new(self.clone())
+    }
+}
+
+struct OrderEventQueue {
+    inner: BookStorage,
+}
+
+impl OrderEventQueue {
+    fn new(storage: BookStorage) -> Self {
+        Self { inner: storage }
+    }
+}
+
+impl OrderEventMap for OrderEventQueue {
+    fn all(&self) -> Map<OrderId, Vec<OrderEvent>> {
+        let key = self.inner.order_events_key();
+        self.inner
+            .storage()
+            .get::<Bytes, Map<OrderId, Vec<OrderEvent>>>(&key)
+            .unwrap_or_else(|| Map::new(&self.inner.env))
+    }
+
+    fn get(&self, order: &OrderId) -> Vec<crate::OrderEvent> {
+        self.all()
+            .get(order.clone())
+            .unwrap_or_else(|| Vec::new(&self.inner.env))
+    }
+
+    fn push(&self, order: &OrderId, event: OrderEvent) {
+        let key = self.inner.order_events_key();
+        let mut map = self.all();
+
+        let mut events = map
+            .get(order.clone())
+            .unwrap_or_else(|| Vec::new(&self.inner.env));
+
+        events.push_back(event);
+        map.set(order.clone(), events);
+
+        self.inner.storage().set(&key, &map);
+    }
+
+    fn consume(&self, orders: Map<OrderId, u32>) -> Vec<(OrderId, OrderEvent)> {
+        let mut map = self.all();
+        let mut to_consume = Vec::new(&self.inner.env);
+
+        for (order, count) in orders {
+            let count = count as usize;
+
+            let mut events = map
+                .get(order.clone())
+                .unwrap_or_else(|| Vec::new(&self.inner.env));
+
+            for _ in 0..count {
+                if let Some(next) = events.pop_front() {
+                    to_consume.push_back((order.clone(), next));
+                }
+            }
+
+            match events.len() {
+                0 => {
+                    map.remove(order.clone());
+                    self.inner.cleanup_order(&order, false);
+                }
+                _ => _ = map.set(order.clone(), events),
+            }
+        }
+
+        let key = self.inner.order_events_key();
+        self.inner.storage().set(&key, &map);
+
+        to_consume
     }
 }
 
@@ -296,7 +294,7 @@ impl Iterator for StoredOrders {
                     };
 
                     self.current_price = price;
-                    self.current_queue = Some(self.storage.get_price_queue(price));
+                    self.current_queue = Some(self.storage.get_price_queue(price).keys());
                 }
 
                 Some(queue) => {
@@ -332,8 +330,8 @@ mod tests {
 
     #[contractimpl]
     impl Contract {
-        fn book(env: &Env) -> impl Book<u64, OrderId = OrderId> {
-            BookStorage::open(env, 0xBEEF)
+        fn book(env: &Env) -> impl Book<u64> {
+            BookStorage::new(env, 0xBEEF)
         }
 
         pub fn place_bid(env: Env, price: u64, size: u128) -> OrderId {

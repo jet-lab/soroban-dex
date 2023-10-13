@@ -1,9 +1,10 @@
 #![cfg_attr(not(test), no_std)]
 
 use fixed::types::U96F32;
-use orderbook::{BookStorage, OrderBook};
+use orderbook::OrderBook;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Map,
+    Symbol,
 };
 
 pub use orderbook::OrderId;
@@ -165,6 +166,15 @@ impl DexMarket for DexMarketContract {
                     );
                 }
             }
+
+            // Consume the maker side events too, since we already transferred their tokens
+            //
+            // Ideally the events would be consumed separately to avoid conflicts in tx footprints
+
+            let mut orders_to_consume = Map::new(&env);
+            orders_to_consume.set(entry.id.clone(), 1);
+
+            order_book.consume_events(orders_to_consume);
         });
 
         if is_self_trade {
@@ -239,8 +249,8 @@ impl DexMarket for DexMarketContract {
     }
 }
 
-fn order_book_state(env: &Env) -> OrderBook<OrderDetail, BookStorage> {
-    OrderBook::new(BookStorage::open(&env, 0xF1A0))
+fn order_book_state(env: &Env) -> OrderBook<OrderDetail> {
+    OrderBook::open(&env, 0xF1A0)
 }
 
 #[contracttype]

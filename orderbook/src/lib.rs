@@ -3,51 +3,58 @@
 #![allow(refining_impl_trait)]
 #![allow(private_interfaces)]
 
+mod orders;
 mod storage;
 
-use soroban_sdk::contracttype;
-pub use storage::*;
+pub use orders::*;
+use soroban_sdk::{contracttype, Env, IntoVal, Map, TryFromVal, Val, Vec};
+use storage::*;
 
 /// A general purpose order book
-pub struct OrderBook<T, B>
+pub struct OrderBook<T>
 where
     T: 'static,
-    B: Book<T>,
 {
     _detail: core::marker::PhantomData<T>,
-    book: B,
+    book: BookStorage,
 }
 
-impl<T, B> OrderBook<T, B>
+impl<T> OrderBook<T>
 where
-    B: Book<T>,
-    T: 'static,
+    T: TryFromVal<Env, Val> + IntoVal<Env, Val> + 'static,
 {
-    pub fn new(book: B) -> Self {
+    /// Open an orderbook structure within the current environment
+    ///
+    /// # Params
+    ///
+    /// `prefix` - An identifier which is used as a prefix for all keys that will be used
+    ///            to store data for the order book.
+    pub fn open(env: &Env, prefix: u16) -> Self {
         Self {
             _detail: core::marker::PhantomData,
-            book,
+            book: BookStorage::new(env, prefix),
         }
     }
 
-    pub fn get_order(&self, id: &B::OrderId) -> Option<OrderEntry<B::OrderId, T>> {
-        self.book.get_order(id)
+    pub fn get_order(&self, id: &OrderId) -> Option<OrderEntry<OrderId, T>> {
+        self.book().get_order(id)
     }
 
-    pub fn orders(&self, side: OrderSide) -> impl IntoIterator<Item = B::OrderId> + '_ {
-        self.book.orders(side)
+    pub fn orders(&self, side: OrderSide) -> impl IntoIterator<Item = OrderId> + '_ {
+        self.book().orders(side)
     }
 
-    pub fn cancel_order(&self, id: &B::OrderId) {
-        self.book.remove_order(id);
+    pub fn cancel_order(&self, id: &OrderId) {
+        self.book().remove_order(id);
     }
 
     pub fn place_order(
         &self,
         params: &OrderParams<T>,
-        mut on_match: impl FnMut(&OrderEntry<B::OrderId, T>),
-    ) -> OrderSummary<B::OrderId> {
-        let matchable = self.book.orders(params.side.opposite());
+        mut on_match: impl FnMut(&OrderEntry<OrderId, T>),
+    ) -> OrderSummary<OrderId> {
+        let matchable = self.book().orders(params.side.opposite());
+        let order_events = self.book().order_events();
         let mut amount_to_post = params.size;
 
         for order_id in matchable {
@@ -64,23 +71,26 @@ where
                 break;
             }
 
-            if amount_to_post >= order.size {
-                amount_to_post -= order.size;
+            let matched_size = match order.size {
+                size if size <= amount_to_post => {
+                    self.book().modify_order(&order_id, 0);
+                    size
+                }
 
-                self.book.remove_order(&order_id);
-                on_match(&order);
-            } else {
-                let order_new_size = order.size - amount_to_post;
+                size => {
+                    self.book().modify_order(&order_id, size - amount_to_post);
+                    amount_to_post
+                }
+            };
 
-                self.book.modify_order(&order_id, order_new_size);
+            amount_to_post -= matched_size;
 
-                on_match(&OrderEntry {
-                    size: amount_to_post,
-                    ..order
-                });
+            order_events.push(&order.id, OrderEvent::Fill(matched_size));
 
-                amount_to_post = 0;
-            }
+            on_match(&OrderEntry {
+                size: matched_size,
+                ..order
+            });
 
             if amount_to_post == 0 {
                 break;
@@ -102,17 +112,35 @@ where
             posted_size: amount_to_post,
         }
     }
+
+    pub fn events(&self) -> Map<OrderId, Vec<OrderEvent>> {
+        self.book().order_events().all()
+    }
+
+    pub fn consume_events(&self, orders: Map<OrderId, u32>) -> Vec<(OrderId, OrderEvent)> {
+        self.book().order_events().consume(orders)
+    }
+
+    fn book(&self) -> &impl Book<T> {
+        &self.book
+    }
 }
 
 /// An interface to the storage of an order book
 pub trait Book<T: 'static> {
-    type OrderId: Eq + Clone;
+    fn get_order(&self, id: &OrderId) -> Option<OrderEntry<OrderId, T>>;
+    fn orders(&self, side: OrderSide) -> impl IntoIterator<Item = OrderId>;
+    fn place_order(&self, side: OrderSide, price: u64, size: u128, details: &T) -> OrderId;
+    fn remove_order(&self, id: &OrderId);
+    fn modify_order(&self, id: &OrderId, new_size: u128);
+    fn order_events(&self) -> impl OrderEventMap;
+}
 
-    fn get_order(&self, id: &Self::OrderId) -> Option<OrderEntry<Self::OrderId, T>>;
-    fn orders(&self, side: OrderSide) -> impl IntoIterator<Item = Self::OrderId>;
-    fn place_order(&self, side: OrderSide, price: u64, size: u128, details: &T) -> Self::OrderId;
-    fn remove_order(&self, id: &Self::OrderId);
-    fn modify_order(&self, id: &Self::OrderId, new_size: u128);
+pub trait OrderEventMap {
+    fn all(&self) -> Map<OrderId, Vec<OrderEvent>>;
+    fn get(&self, order: &OrderId) -> Vec<OrderEvent>;
+    fn push(&self, order: &OrderId, event: OrderEvent);
+    fn consume(&self, orders: Map<OrderId, u32>) -> Vec<(OrderId, OrderEvent)>;
 }
 
 /// The side of the book an order can be placed on
