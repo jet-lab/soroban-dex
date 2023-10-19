@@ -12,10 +12,15 @@ soroban contract build --package dex-market
 ```
 
 ## Deploy to a local validator
-Run this script to start a local validator and deploy dex_market to it:
+Run this script to start a local validator in docker and deploy dex_market to it:
 
 ```bash
 ./validator.sh
+```
+
+To stop the validator:
+```bash
+./validator.sh stop
 ```
 
 Dependencies:
