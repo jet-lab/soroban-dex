@@ -44,7 +44,7 @@ deploy() { local contract=$1;
     soroban contract deploy \
             --wasm "target/wasm32-unknown-unknown/release/$contract.wasm" \
             --source local-deployer \
-            --network local
+            --network local > .soroban/$contract-id
 }
 
 # airdrop local-deployer once the validator is ready
@@ -68,7 +68,10 @@ full() {
     config-cli
     start
     await-startup-and-airdrop-deployer
+    soroban contract build --package dex-market
+    soroban contract build --package dex-token
     deploy dex_market
+    deploy dex_token
 }
 
 
