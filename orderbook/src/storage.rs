@@ -1,6 +1,6 @@
 use soroban_sdk::{storage::Persistent, Bytes, Env, IntoVal, Map, TryFromVal, Val, Vec};
 
-use crate::{Book, OrderEntry, OrderEvent, OrderEventMap, OrderId, OrderSide};
+use crate::{Book, OrderEntry, OrderEvent, OrderEventMap, OrderId, OrderbookSide};
 
 /// Provides an order book storage interface within a Soroban contract environment
 #[derive(Clone)]
@@ -34,14 +34,14 @@ impl BookStorage {
         key
     }
 
-    fn book_key(&self, side: OrderSide) -> Bytes {
+    fn book_key(&self, side: OrderbookSide) -> Bytes {
         let mut book_key = Bytes::from_array(&self.env, &self.prefix.to_be_bytes());
         book_key.push_back(side as u8);
 
         book_key
     }
 
-    fn get_book(&self, side: OrderSide) -> Map<u64, ()> {
+    fn get_book(&self, side: OrderbookSide) -> Map<u64, ()> {
         let key = self.book_key(side);
 
         self.storage()
@@ -49,13 +49,13 @@ impl BookStorage {
             .unwrap_or_else(|| Map::new(&self.env))
     }
 
-    fn set_book(&self, side: OrderSide, book: &Map<u64, ()>) {
+    fn set_book(&self, side: OrderbookSide, book: &Map<u64, ()>) {
         let key = self.book_key(side);
         self.storage().set(&key, book);
     }
 
     fn price_queue_key(&self, price: u64) -> Bytes {
-        OrderId::new(&self.env, self.prefix, OrderSide::Bid, price, 0).price_key()
+        OrderId::new(&self.env, self.prefix, OrderbookSide::Bid, price, 0).price_key()
     }
 
     fn get_price_queue(&self, price: u64) -> Map<u32, u128> {
@@ -119,16 +119,16 @@ where
             })
     }
 
-    fn orders(&self, side: OrderSide) -> StoredOrders {
+    fn orders(&self, side: OrderbookSide) -> StoredOrders {
         let book = self.get_book(side);
 
         match side {
-            OrderSide::Bid => StoredOrders::bids(self, book.keys().into_iter().rev()),
-            OrderSide::Ask => StoredOrders::asks(self, book.keys().into_iter()),
+            OrderbookSide::Bid => StoredOrders::bids(self, book.keys().into_iter().rev()),
+            OrderbookSide::Ask => StoredOrders::asks(self, book.keys().into_iter()),
         }
     }
 
-    fn place_order(&self, side: OrderSide, price: u64, size: u128, details: &T) -> OrderId {
+    fn place_order(&self, side: OrderbookSide, price: u64, size: u128, details: &T) -> OrderId {
         // update book price list
         let mut book = self.get_book(side);
 
@@ -242,7 +242,7 @@ impl OrderEventMap for OrderEventQueue {
 struct StoredOrders {
     storage: BookStorage,
     inner: StoredOrdersInner,
-    side: OrderSide,
+    side: OrderbookSide,
     current_price: u64,
     current_queue: Option<Vec<u32>>,
 }
@@ -255,7 +255,7 @@ impl StoredOrders {
         Self {
             storage: storage.clone(),
             inner: StoredOrdersInner::BidPrices(prices),
-            side: OrderSide::Bid,
+            side: OrderbookSide::Bid,
             current_price: 0,
             current_queue: None,
         }
@@ -265,7 +265,7 @@ impl StoredOrders {
         Self {
             storage: storage.clone(),
             inner: StoredOrdersInner::AskPrices(prices),
-            side: OrderSide::Ask,
+            side: OrderbookSide::Ask,
             current_price: 0,
             current_queue: None,
         }
@@ -337,13 +337,13 @@ mod tests {
         pub fn place_bid(env: Env, price: u64, size: u128) -> OrderId {
             let book = Self::book(&env);
 
-            book.place_order(OrderSide::Bid, price, size, &0)
+            book.place_order(OrderbookSide::Bid, price, size, &0)
         }
 
         pub fn place_ask(env: Env, price: u64, size: u128) -> OrderId {
             let book = Self::book(&env);
 
-            book.place_order(OrderSide::Ask, price, size, &0)
+            book.place_order(OrderbookSide::Ask, price, size, &0)
         }
 
         pub fn remove_order(env: Env, id: OrderId) {
@@ -359,14 +359,14 @@ mod tests {
         pub fn top_bid(env: Env) -> Option<OrderId> {
             let book = Self::book(&env);
 
-            let mut orders = book.orders(OrderSide::Bid).into_iter();
+            let mut orders = book.orders(OrderbookSide::Bid).into_iter();
             orders.next().map(|id| id.clone())
         }
 
         pub fn top_ask(env: Env) -> Option<OrderId> {
             let book = Self::book(&env);
 
-            let mut orders = book.orders(OrderSide::Ask).into_iter();
+            let mut orders = book.orders(OrderbookSide::Ask).into_iter();
             orders.next().map(|id| id.clone())
         }
     }

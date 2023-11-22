@@ -53,11 +53,11 @@ pub trait DexMarket {
     fn cancel_order(env: Env, order: OrderId);
 }
 
-impl From<OrderSide> for orderbook::OrderSide {
+impl From<OrderSide> for orderbook::OrderbookSide {
     fn from(value: OrderSide) -> Self {
         match value {
-            OrderSide::Bid => orderbook::OrderSide::Bid,
-            OrderSide::Ask => orderbook::OrderSide::Ask,
+            OrderSide::Bid => orderbook::OrderbookSide::Bid,
+            OrderSide::Ask => orderbook::OrderbookSide::Ask,
         }
     }
 }
@@ -84,7 +84,7 @@ impl DexMarket for DexMarketContract {
 
     /// Place a new order in the market
     fn place_order(env: Env, params: OrderParams) -> Result<Option<OrderId>, DexMarketError> {
-        use orderbook::OrderSide;
+        use orderbook::OrderbookSide;
 
         let order_book = order_book_state(&env);
         let params = orderbook::OrderParams {
@@ -108,7 +108,7 @@ impl DexMarket for DexMarketContract {
         let quote_offer_amount = quote_amount(params.price, params.size);
 
         match params.side {
-            OrderSide::Bid => {
+            OrderbookSide::Bid => {
                 quote.transfer(
                     &params.details.owner,
                     &env.current_contract_address(),
@@ -116,7 +116,7 @@ impl DexMarket for DexMarketContract {
                 );
             }
 
-            OrderSide::Ask => {
+            OrderbookSide::Ask => {
                 base.transfer(
                     &params.details.owner,
                     &env.current_contract_address(),
@@ -138,7 +138,7 @@ impl DexMarket for DexMarketContract {
             quote_consumed += quote_amount;
 
             match entry.id.side() {
-                OrderSide::Bid => {
+                OrderbookSide::Bid => {
                     base.transfer(
                         &env.current_contract_address(),
                         &entry.details.owner,
@@ -152,7 +152,7 @@ impl DexMarket for DexMarketContract {
                     );
                 }
 
-                OrderSide::Ask => {
+                OrderbookSide::Ask => {
                     quote.transfer(
                         &env.current_contract_address(),
                         &entry.details.owner,
@@ -183,7 +183,7 @@ impl DexMarket for DexMarketContract {
 
         // return unnecessary tokens
         match params.side {
-            OrderSide::Bid => {
+            OrderbookSide::Bid => {
                 let return_token_amount = quote_offer_amount
                     - quote_consumed
                     - quote_amount(params.price, summary.posted_size);
@@ -195,7 +195,7 @@ impl DexMarket for DexMarketContract {
                 );
             }
 
-            OrderSide::Ask => {
+            OrderbookSide::Ask => {
                 let return_token_amount =
                     (params.size - summary.posted_size) as i128 - base_consumed;
 
@@ -212,7 +212,7 @@ impl DexMarket for DexMarketContract {
 
     /// Cancel a previously placed order
     fn cancel_order(env: Env, order: OrderId) {
-        use orderbook::OrderSide;
+        use orderbook::OrderbookSide;
 
         let order_book = order_book_state(&env);
         let order_detail = order_book.get_order(&order);
@@ -225,7 +225,7 @@ impl DexMarket for DexMarketContract {
             let quote = token::Client::new(&env, &market_info.quote_token);
 
             match order_detail.id.side() {
-                OrderSide::Ask => {
+                OrderbookSide::Ask => {
                     base.transfer(
                         &env.current_contract_address(),
                         &order_detail.details.owner,
@@ -233,7 +233,7 @@ impl DexMarket for DexMarketContract {
                     );
                 }
 
-                OrderSide::Bid => {
+                OrderbookSide::Bid => {
                     let token_amount = quote_amount(order_detail.price, order_detail.size);
 
                     quote.transfer(

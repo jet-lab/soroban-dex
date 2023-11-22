@@ -2,7 +2,7 @@ use core::fmt::Debug;
 
 use soroban_sdk::{contracttype, Bytes, BytesN, Env};
 
-use crate::OrderSide;
+use crate::OrderbookSide;
 
 /// An identifier for an order in the book
 ///
@@ -19,7 +19,7 @@ use crate::OrderSide;
 pub struct OrderId(BytesN<16>);
 
 impl OrderId {
-    pub fn new(env: &Env, prefix: u16, side: OrderSide, price: u64, id: u32) -> Self {
+    pub fn new(env: &Env, prefix: u16, side: OrderbookSide, price: u64, id: u32) -> Self {
         let mut bytes = [0u8; 16];
         bytes[0..2].copy_from_slice(&prefix.to_be_bytes());
         bytes[3] = side as u8;
@@ -30,10 +30,10 @@ impl OrderId {
         Self(BytesN::from_array(env, &bytes))
     }
 
-    pub fn side(&self) -> OrderSide {
+    pub fn side(&self) -> OrderbookSide {
         match self.0.to_array()[3] {
-            0 => OrderSide::Bid,
-            1 => OrderSide::Ask,
+            0 => OrderbookSide::Bid,
+            1 => OrderbookSide::Ask,
             _ => unreachable!(),
         }
     }

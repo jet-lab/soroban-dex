@@ -1,5 +1,4 @@
 #![cfg_attr(not(test), no_std)]
-#![feature(return_position_impl_trait_in_trait)]
 #![allow(refining_impl_trait)]
 #![allow(private_interfaces)]
 
@@ -40,7 +39,7 @@ where
         self.book().get_order(id)
     }
 
-    pub fn orders(&self, side: OrderSide) -> impl IntoIterator<Item = OrderId> + '_ {
+    pub fn orders(&self, side: OrderbookSide) -> impl IntoIterator<Item = OrderId> + '_ {
         self.book().orders(side)
     }
 
@@ -63,8 +62,8 @@ where
             };
 
             let is_matching = match params.side {
-                OrderSide::Bid => order.price <= params.price,
-                OrderSide::Ask => order.price >= params.price,
+                OrderbookSide::Bid => order.price <= params.price,
+                OrderbookSide::Ask => order.price >= params.price,
             };
 
             if !is_matching {
@@ -129,8 +128,8 @@ where
 /// An interface to the storage of an order book
 pub trait Book<T: 'static> {
     fn get_order(&self, id: &OrderId) -> Option<OrderEntry<OrderId, T>>;
-    fn orders(&self, side: OrderSide) -> impl IntoIterator<Item = OrderId>;
-    fn place_order(&self, side: OrderSide, price: u64, size: u128, details: &T) -> OrderId;
+    fn orders(&self, side: OrderbookSide) -> impl IntoIterator<Item = OrderId>;
+    fn place_order(&self, side: OrderbookSide, price: u64, size: u128, details: &T) -> OrderId;
     fn remove_order(&self, id: &OrderId);
     fn modify_order(&self, id: &OrderId, new_size: u128);
     fn order_events(&self) -> impl OrderEventMap;
@@ -147,23 +146,23 @@ pub trait OrderEventMap {
 #[contracttype]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-pub enum OrderSide {
+pub enum OrderbookSide {
     Bid = 0,
     Ask = 1,
 }
 
-impl OrderSide {
+impl OrderbookSide {
     pub fn opposite(&self) -> Self {
         match self {
-            OrderSide::Bid => OrderSide::Ask,
-            OrderSide::Ask => OrderSide::Bid,
+            OrderbookSide::Bid => OrderbookSide::Ask,
+            OrderbookSide::Ask => OrderbookSide::Bid,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderParams<T: 'static> {
-    pub side: OrderSide,
+    pub side: OrderbookSide,
     pub price: u64,
     pub size: u128,
     pub details: T,
